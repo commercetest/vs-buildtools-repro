@@ -1,0 +1,49 @@
+name: vs-buildtools-repro
+
+# Reproduces (or rules out) the VS Build Tools installer hang on the July 2026
+# Windows Server base-image update, using GitHub-hosted runners.
+#
+# Context: the confirmed break is on Server 2019 / ltsc2019, build 17763.9020
+# (KB5099538) — see microsoft/Windows-Containers#641. GitHub retired the
+# windows-2019 runner in 2025, and hosted windows-2022 runners can't run an
+# ltsc2019 container (Hyper-V isolation needs nested virt, unavailable on hosted
+# runners). So this runs on Server 2022 with ltsc2022 containers to test whether
+# the SAME regression is present there too.
+#
+# A/B via the matrix: the current (patched) base vs a dated pre-July snapshot.
+# Read the results:
+#   current TIMES OUT + dated SUCCEEDS -> regression is present on Server 2022 too.
+#   both SUCCEED                        -> Server 2022 unaffected; bug is 2019-only
+#                                          (needs a Server 2019 host to reproduce).
+#   both TIME OUT                       -> inconclusive for this hosted setup.
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  install:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        base:
+          - "mcr.microsoft.com/dotnet/framework/runtime:4.8-windowsservercore-ltsc2022"           # current / patched
+          - "mcr.microsoft.com/dotnet/framework/runtime:4.8-20260512-windowsservercore-ltsc2022"  # dated, pre-July 2026
+    name: "install on ${{ matrix.base }}"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Runner OS build
+        run: cmd /c ver
+
+      - name: Base image OS build
+        run: docker run --rm ${{ matrix.base }} cmd /c ver
+
+      # If the installer hangs, this step is killed at the timeout and the job
+      # fails — that timeout IS the reproduction signal. A working base finishes
+      # (downloads VC.Tools) in well under the limit and prints INSTALL COMPLETED.
+      - name: Build image (VS Build Tools install)
+        timeout-minutes: 20
+        run: docker build --no-cache --build-arg BASE=${{ matrix.base }} -t vsrepro .
