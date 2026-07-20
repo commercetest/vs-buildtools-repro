@@ -6,44 +6,39 @@ name: vs-buildtools-repro
 # Context: the confirmed break is on Server 2019 / ltsc2019, build 17763.9020
 # (KB5099538) — see microsoft/Windows-Containers#641. GitHub retired the
 # windows-2019 runner in 2025, and hosted windows-2022 runners can't run an
-# ltsc2019 container (Hyper-V isolation needs nested virt, unavailable on hosted
-# runners). So this runs on Server 2022 with ltsc2022 containers to test whether
-# the SAME regression is present there too.
+# ltsc2019 container (Hyper-V isolation needs nested virt). So this runs on
+# Server 2022 with ltsc2022 to test whether the SAME regression is present there.
 #
-# A/B via the matrix: the current (patched) base vs a dated pre-July snapshot.
-# Read the results:
-#   current TIMES OUT + dated SUCCEEDS -> regression is present on Server 2022 too.
-#   both SUCCEED                        -> Server 2022 unaffected; bug is 2019-only
-#                                          (needs a Server 2019 host to reproduce).
-#   both TIME OUT                       -> inconclusive for this hosted setup.
+# The key test is the CURRENT (patched) ltsc2022 base. The workflow also lists
+# the real dated tags from the registry so we can add a pre-July baseline for a
+# clean A/B once we know which ones exist.
 
 on:
   push:
   workflow_dispatch:
 
 jobs:
-  install:
+  repro:
     runs-on: windows-2022
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        base:
-          - "mcr.microsoft.com/dotnet/framework/runtime:4.8-windowsservercore-ltsc2022"           # current / patched
-          - "mcr.microsoft.com/dotnet/framework/runtime:4.8-20260512-windowsservercore-ltsc2022"  # dated, pre-July 2026
-    name: "install on ${{ matrix.base }}"
     steps:
       - uses: actions/checkout@v4
 
       - name: Runner OS build
         run: cmd /c ver
 
-      - name: Base image OS build
-        run: docker run --rm ${{ matrix.base }} cmd /c ver
+      - name: Available dated ltsc2022 base tags (authoritative, from the registry)
+        shell: powershell
+        run: |
+          (Invoke-RestMethod https://mcr.microsoft.com/v2/dotnet/framework/runtime/tags/list).tags |
+            Where-Object { $_ -like '4.8-2*-windowsservercore-ltsc2022' } | Sort-Object
+
+      - name: Current base OS build
+        run: docker run --rm mcr.microsoft.com/dotnet/framework/runtime:4.8-windowsservercore-ltsc2022 cmd /c ver
 
       # If the installer hangs, this step is killed at the timeout and the job
       # fails — that timeout IS the reproduction signal. A working base finishes
-      # (downloads VC.Tools) in well under the limit and prints INSTALL COMPLETED.
-      - name: Build image (VS Build Tools install)
+      # (downloads VC.Tools) well under the limit and prints INSTALL COMPLETED.
+      - name: Install VS Build Tools on CURRENT ltsc2022 (does it hang?)
         timeout-minutes: 20
-        run: docker build --no-cache --build-arg BASE=${{ matrix.base }} -t vsrepro .
+        run: docker build --no-cache --build-arg BASE=mcr.microsoft.com/dotnet/framework/runtime:4.8-windowsservercore-ltsc2022 -t vsrepro .
